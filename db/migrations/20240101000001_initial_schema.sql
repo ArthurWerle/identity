@@ -10,6 +10,29 @@ CREATE TABLE IF NOT EXISTS users (
     last_login TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS roles (
+    id SERIAL PRIMARY KEY,
+    description VARCHAR(255) NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+)
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    role_id INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, role_id),
+    CONSTRAINT fk_user_roles_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+    CONSTRAINT fk_user_roles_roles
+        FOREIGN KEY (role_id)
+        REFERENCES roles(id)
+        ON DELETE CASCADE
+
+);
+
 CREATE INDEX idx_users_deleted_at ON users(deleted_at);
 CREATE INDEX idx_users_email ON users(email);
 

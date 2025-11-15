@@ -91,6 +91,21 @@ migrate-status: ## Check migration status
 		echo "Atlas not installed."; \
 	fi
 
+migrate-create: ## Create a new migration file (usage: make migrate-create NAME=migration_name)
+	@if [ -z "$(NAME)" ]; then \
+		echo "Error: NAME is required. Usage: make migrate-create NAME=my_migration"; \
+		exit 1; \
+	fi
+	@TIMESTAMP=$$(date +%Y%m%d%H%M%S); \
+	FILENAME="db/migrations/$${TIMESTAMP}_$(NAME).sql"; \
+	touch "$$FILENAME"; \
+	echo "-- Migration: $(NAME)" > "$$FILENAME"; \
+	echo "-- Created: $$(date)" >> "$$FILENAME"; \
+	echo "" >> "$$FILENAME"; \
+	echo "-- Add your SQL statements below" >> "$$FILENAME"; \
+	echo "" >> "$$FILENAME"; \
+	echo "Created migration: $$FILENAME"
+
 # Swagger documentation
 swagger: ## Generate Swagger documentation
 	@echo "Generating Swagger documentation..."
