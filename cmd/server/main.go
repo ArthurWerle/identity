@@ -61,6 +61,7 @@ func main() {
 		&model.User{},
 		&model.FeatureFlag{},
 		&model.UserFeatureFlag{},
+		&model.Session{},
 	); err != nil {
 		logger.Error("failed to auto migrate", "error", err)
 		os.Exit(1)
@@ -70,17 +71,21 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	featureFlagRepo := repository.NewFeatureFlagRepository(db)
 	userFFRepo := repository.NewUserFeatureFlagRepository(db)
+	sessionRepo := repository.NewSessionRepository(db)
 
 	// Setup services
 	userService := service.NewUserService(userRepo, featureFlagRepo, userFFRepo)
 	featureFlagService := service.NewFeatureFlagService(featureFlagRepo)
+	authService := service.NewAuthService(userRepo, sessionRepo)
 
 	// Setup handlers
 	userHandler := handler.NewUserHandler(userService, logger)
 	featureFlagHandler := handler.NewFeatureFlagHandler(featureFlagService, logger)
+	authHandler := handler.NewAuthHandler(authService, logger)
+	webHandler := handler.NewWebHandler(authService, userService, featureFlagService, logger)
 
 	// Setup HTTP server
-	router := setupRouter(cfg, logger, userHandler, featureFlagHandler)
+	router := setupRouter(cfg, logger, userHandler, featureFlagHandler, authHandler, webHandler, authService)
 
 	// Create HTTP server
 	srv := &http.Server{
@@ -171,7 +176,15 @@ func setupDatabase(cfg *config.Config, logger *slog.Logger) (*gorm.DB, error) {
 	return db, nil
 }
 
-func setupRouter(cfg *config.Config, logger *slog.Logger, userHandler *handler.UserHandler, featureFlagHandler *handler.FeatureFlagHandler) *gin.Engine {
+func setupRouter(
+	cfg *config.Config,
+	logger *slog.Logger,
+	userHandler *handler.UserHandler,
+	featureFlagHandler *handler.FeatureFlagHandler,
+	authHandler *handler.AuthHandler,
+	webHandler *handler.WebHandler,
+	authService service.AuthService,
+) *gin.Engine {
 	// Set gin mode
 	if cfg.Log.Level != "debug" {
 		gin.SetMode(gin.ReleaseMode)
@@ -195,6 +208,15 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, userHandler *handler.U
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
+		// Auth routes (public)
+		auth := v1.Group("/auth")
+		{
+			auth.POST("/login", authHandler.Login)
+			auth.POST("/logout", authHandler.Logout)
+			auth.POST("/register", authHandler.Register)
+			auth.GET("/me", authHandler.Me)
+		}
+
 		// User routes
 		users := v1.Group("/users")
 		{
@@ -216,6 +238,29 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, userHandler *handler.U
 			featureFlags.GET("/:id", featureFlagHandler.GetFeatureFlag)
 			featureFlags.PUT("/:id", featureFlagHandler.UpdateFeatureFlag)
 			featureFlags.DELETE("/:id", featureFlagHandler.DeleteFeatureFlag)
+		}
+	}
+
+	// Web admin interface routes
+	admin := router.Group("/admin")
+	{
+		// Public routes
+		admin.GET("/login", webHandler.LoginPage)
+		admin.POST("/login", webHandler.LoginSubmit)
+		admin.GET("/logout", webHandler.Logout)
+
+		// Protected routes
+		protected := admin.Group("")
+		protected.Use(middleware.WebAuth(authService, logger))
+		{
+			protected.GET("", webHandler.Dashboard)
+			protected.GET("/flags", webHandler.FlagsTab)
+			protected.GET("/users", webHandler.UsersTab)
+			protected.POST("/flags", webHandler.CreateFlag)
+			protected.PUT("/flags/:id/toggle", webHandler.ToggleFlag)
+			protected.DELETE("/flags/:id", webHandler.DeleteFlag)
+			protected.GET("/users/:id/flags", webHandler.UserFlags)
+			protected.POST("/users/:id/flags/:key/toggle", webHandler.ToggleUserFlag)
 		}
 	}
 

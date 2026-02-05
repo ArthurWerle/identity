@@ -1,0 +1,221 @@
+{{define "content"}}
+<nav class="navbar">
+    <h1>Identity Admin</h1>
+    <div class="user-info">
+        <span>Welcome, {{.User.Name}}</span>
+        <a href="/admin/logout">Logout</a>
+    </div>
+</nav>
+
+<div class="container">
+    {{if .Success}}
+    <div class="alert alert-success">{{.Success}}</div>
+    {{end}}
+
+    {{if .Error}}
+    <div class="alert alert-error">{{.Error}}</div>
+    {{end}}
+
+    <div class="tabs">
+        <button class="tab {{if eq .ActiveTab "flags"}}active{{end}}"
+                hx-get="/admin/flags"
+                hx-target="#content"
+                hx-push-url="true">Feature Flags</button>
+        <button class="tab {{if eq .ActiveTab "users"}}active{{end}}"
+                hx-get="/admin/users"
+                hx-target="#content"
+                hx-push-url="true">Users</button>
+    </div>
+
+    <div id="content">
+        {{template "tab-content" .}}
+    </div>
+</div>
+{{end}}
+
+{{define "tab-content"}}
+{{if eq .ActiveTab "flags"}}
+    {{template "flags-content" .}}
+{{else if eq .ActiveTab "users"}}
+    {{template "users-content" .}}
+{{end}}
+{{end}}
+
+{{define "flags-content"}}
+<div class="card">
+    <div class="section-header">
+        <h2>Global Feature Flags</h2>
+        <button class="btn btn-primary" onclick="document.getElementById('new-flag-form').style.display = document.getElementById('new-flag-form').style.display === 'none' ? 'block' : 'none'">
+            + New Flag
+        </button>
+    </div>
+
+    <div id="new-flag-form" style="display: none; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px;">
+        <form hx-post="/admin/flags" hx-target="#flags-table" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful) this.reset()">
+            <div style="display: flex; gap: 10px; align-items: end;">
+                <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                    <label for="key">Key</label>
+                    <input type="text" id="key" name="key" required placeholder="e.g., dark_mode">
+                </div>
+                <div class="form-group" style="flex: 2; margin-bottom: 0;">
+                    <label for="description">Description</label>
+                    <input type="text" id="description" name="description" placeholder="Description">
+                </div>
+                <button type="submit" class="btn btn-success">Create</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="flags-table">
+        {{template "flags-table" .}}
+    </div>
+</div>
+{{end}}
+
+{{define "flags-table"}}
+<table>
+    <thead>
+        <tr>
+            <th>Key</th>
+            <th>Description</th>
+            <th>Global Status</th>
+            <th>Users</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Flags}}
+        <tr id="flag-row-{{.ID}}">
+            <td><code>{{.Key}}</code></td>
+            <td>{{.Description}}</td>
+            <td>
+                <label class="toggle">
+                    <input type="checkbox"
+                           {{if .Enabled}}checked{{end}}
+                           hx-put="/admin/flags/{{.ID}}/toggle"
+                           hx-target="#flag-row-{{.ID}}"
+                           hx-swap="outerHTML">
+                    <span class="toggle-slider"></span>
+                </label>
+            </td>
+            <td>
+                <span class="badge badge-info">{{.UserCount}} users</span>
+            </td>
+            <td>
+                <button class="btn btn-danger"
+                        hx-delete="/admin/flags/{{.ID}}"
+                        hx-target="#flag-row-{{.ID}}"
+                        hx-swap="outerHTML"
+                        hx-confirm="Are you sure you want to delete this flag?">
+                    Delete
+                </button>
+            </td>
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="5" style="text-align: center; color: #666;">No feature flags found</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}
+
+{{define "users-content"}}
+<div class="card">
+    <h2>User Feature Flags</h2>
+    <p style="color: #666; margin-bottom: 15px;">Manage which feature flags are enabled for each user</p>
+
+    <div id="users-list">
+        {{template "users-list" .}}
+    </div>
+</div>
+{{end}}
+
+{{define "users-list"}}
+<table>
+    <thead>
+        <tr>
+            <th>User</th>
+            <th>Email</th>
+            <th>Status</th>
+            <th>Feature Flags</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Users}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.Email}}</td>
+            <td>
+                {{if .Enabled}}
+                <span class="badge badge-success">Active</span>
+                {{else}}
+                <span class="badge badge-danger">Disabled</span>
+                {{end}}
+            </td>
+            <td>
+                <button class="btn btn-primary"
+                        hx-get="/admin/users/{{.ID}}/flags"
+                        hx-target="#user-flags-modal"
+                        hx-swap="innerHTML">
+                    Manage Flags ({{.FlagCount}})
+                </button>
+            </td>
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="4" style="text-align: center; color: #666;">No users found</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+
+<div id="user-flags-modal"></div>
+{{end}}
+
+{{define "user-flags-modal"}}
+<div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;">
+    <div class="card" style="width: 100%; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+        <div class="section-header">
+            <h2>Feature Flags for {{.SelectedUser.Name}}</h2>
+            <button class="btn" onclick="document.getElementById('user-flags-modal').innerHTML = ''">&times; Close</button>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Flag</th>
+                    <th>Description</th>
+                    <th>Global</th>
+                    <th>Assigned</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .AllFlags}}
+                <tr>
+                    <td><code>{{.Key}}</code></td>
+                    <td>{{.Description}}</td>
+                    <td>
+                        {{if .Enabled}}
+                        <span class="badge badge-success">ON</span>
+                        {{else}}
+                        <span class="badge badge-danger">OFF</span>
+                        {{end}}
+                    </td>
+                    <td>
+                        <label class="toggle">
+                            <input type="checkbox"
+                                   {{if .IsAssigned}}checked{{end}}
+                                   hx-post="/admin/users/{{$.SelectedUser.ID}}/flags/{{.Key}}/toggle"
+                                   hx-target="#user-flags-modal"
+                                   hx-swap="innerHTML">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+{{end}}
