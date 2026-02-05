@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"identity/internal/model"
 	"identity/internal/service/dto"
 	"testing"
