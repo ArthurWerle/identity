@@ -24,6 +24,63 @@ func NewFeatureFlagHandler(featureFlagService service.FeatureFlagService, logger
 	}
 }
 
+// CheckFeatureFlag godoc
+// @Summary Check if a feature flag is enabled
+// @Description Check whether a feature flag is enabled globally, or for a specific user. A flag is enabled for a user if it is globally enabled OR explicitly assigned to that user.
+// @Tags feature-flags
+// @Accept json
+// @Produce json
+// @Param key query string true "Feature flag key"
+// @Param user_id query int false "User ID (optional)"
+// @Success 200 {object} map[string]bool
+// @Failure 400 {object} dto.ErrorResponse
+// @Failure 404 {object} dto.ErrorResponse
+// @Failure 500 {object} dto.ErrorResponse
+// @Router /api/v1/feature-flags/check [get]
+func (h *FeatureFlagHandler) CheckFeatureFlag(c *gin.Context) {
+	key := c.Query("key")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:   "invalid_request",
+			Message: "key query parameter is required",
+		})
+		return
+	}
+
+	var userID *uint
+	if userIDStr := c.Query("user_id"); userIDStr != "" {
+		id, err := strconv.ParseUint(userIDStr, 10, 32)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+				Error:   "invalid_request",
+				Message: "Invalid user_id",
+			})
+			return
+		}
+		uid := uint(id)
+		userID = &uid
+	}
+
+	enabled, err := h.featureFlagService.CheckFeatureFlag(c.Request.Context(), key, userID)
+	if err != nil {
+		if err.Error() == "feature flag not found" {
+			c.JSON(http.StatusNotFound, dto.ErrorResponse{
+				Error:   "not_found",
+				Message: err.Error(),
+			})
+			return
+		}
+		h.logger.Error("failed to check feature flag", "error", err)
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
+			Error:   "check_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"enabled": enabled})
+}
+
 // CreateFeatureFlag godoc
 // @Summary Create a new feature flag
 // @Description Create a new feature flag with the provided information

@@ -19,17 +19,22 @@ type FeatureFlagService interface {
 	GetFeatureFlags(ctx context.Context, pagination *dto.PaginationParams) (*dto.FeatureFlagListResponse, error)
 	UpdateFeatureFlag(ctx context.Context, id uint, req *dto.UpdateFeatureFlagRequest) (*dto.FeatureFlagResponse, error)
 	DeleteFeatureFlag(ctx context.Context, id uint) error
+	// CheckFeatureFlag returns whether the flag is enabled globally, or for a specific user if userID is provided.
+	// A flag is considered enabled for a user if it is globally enabled OR explicitly assigned to that user.
+	CheckFeatureFlag(ctx context.Context, key string, userID *uint) (bool, error)
 }
 
 // featureFlagService implements FeatureFlagService
 type featureFlagService struct {
 	featureFlagRepo repository.FeatureFlagRepository
+	userFFRepo      repository.UserFeatureFlagRepository
 }
 
 // NewFeatureFlagService creates a new feature flag service
-func NewFeatureFlagService(featureFlagRepo repository.FeatureFlagRepository) FeatureFlagService {
+func NewFeatureFlagService(featureFlagRepo repository.FeatureFlagRepository, userFFRepo repository.UserFeatureFlagRepository) FeatureFlagService {
 	return &featureFlagService{
 		featureFlagRepo: featureFlagRepo,
+		userFFRepo:      userFFRepo,
 	}
 }
 
@@ -142,6 +147,31 @@ func (s *featureFlagService) DeleteFeatureFlag(ctx context.Context, id uint) err
 	}
 
 	return nil
+}
+
+// CheckFeatureFlag returns whether the flag is enabled for the given key (and optionally a specific user).
+func (s *featureFlagService) CheckFeatureFlag(ctx context.Context, key string, userID *uint) (bool, error) {
+	flag, err := s.featureFlagRepo.GetByKey(ctx, key)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, errors.New("feature flag not found")
+		}
+		return false, fmt.Errorf("failed to get feature flag: %w", err)
+	}
+
+	if userID == nil {
+		return flag.Enabled, nil
+	}
+
+	if flag.Enabled {
+		return true, nil
+	}
+
+	assigned, err := s.userFFRepo.IsFeatureFlagAssignedToUser(ctx, *userID, flag.ID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check flag assignment: %w", err)
+	}
+	return assigned, nil
 }
 
 // toFeatureFlagResponse converts a model.FeatureFlag to dto.FeatureFlagResponse
