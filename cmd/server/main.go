@@ -75,7 +75,7 @@ func main() {
 
 	// Setup services
 	userService := service.NewUserService(userRepo, featureFlagRepo, userFFRepo)
-	featureFlagService := service.NewFeatureFlagService(featureFlagRepo)
+	featureFlagService := service.NewFeatureFlagService(featureFlagRepo, userFFRepo)
 	authService := service.NewAuthService(userRepo, sessionRepo)
 
 	// Setup handlers
@@ -215,6 +215,7 @@ func setupRouter(
 			auth.POST("/logout", authHandler.Logout)
 			auth.POST("/register", authHandler.Register)
 			auth.GET("/me", authHandler.Me)
+			auth.POST("/validate", authHandler.ValidateSession)
 		}
 
 		// User routes
@@ -235,6 +236,7 @@ func setupRouter(
 		{
 			featureFlags.POST("", featureFlagHandler.CreateFeatureFlag)
 			featureFlags.GET("", featureFlagHandler.GetFeatureFlags)
+			featureFlags.GET("/check", featureFlagHandler.CheckFeatureFlag)
 			featureFlags.GET("/:id", featureFlagHandler.GetFeatureFlag)
 			featureFlags.PUT("/:id", featureFlagHandler.UpdateFeatureFlag)
 			featureFlags.DELETE("/:id", featureFlagHandler.DeleteFeatureFlag)

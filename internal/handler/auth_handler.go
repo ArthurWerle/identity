@@ -152,6 +152,49 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
+// ValidateSession godoc
+// @Summary Validate a session
+// @Description Validate a session ID and return user info. Accepts session_id in JSON body or X-Session-ID header.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body dto.ValidateSessionRequest false "Session ID"
+// @Success 200 {object} dto.UserResponse
+// @Failure 400 {object} dto.ErrorResponse
+// @Failure 401 {object} dto.ErrorResponse
+// @Router /api/v1/auth/validate [post]
+func (h *AuthHandler) ValidateSession(c *gin.Context) {
+	var sessionID string
+
+	var req dto.ValidateSessionRequest
+	if err := c.ShouldBindJSON(&req); err == nil && req.SessionID != "" {
+		sessionID = req.SessionID
+	}
+
+	if sessionID == "" {
+		sessionID = c.GetHeader("X-Session-ID")
+	}
+
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:   "invalid_request",
+			Message: "session_id is required (provide in JSON body or X-Session-ID header)",
+		})
+		return
+	}
+
+	resp, err := h.authService.GetUserBySession(c.Request.Context(), sessionID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
+			Error:   "unauthorized",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // Me godoc
 // @Summary Get current user
 // @Description Get the currently authenticated user's information

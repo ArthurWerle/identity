@@ -19,3 +19,8 @@ type RegisterRequest struct {
 	Email    string `json:"email" form:"email" binding:"required,email" example:"john@example.com"`
 	Password string `json:"password" form:"password" binding:"required,min=6" example:"password123"`
 }
+
+// ValidateSessionRequest represents the request to validate a session
+type ValidateSessionRequest struct {
+	SessionID string `json:"session_id" example:"abc123"`
+}
