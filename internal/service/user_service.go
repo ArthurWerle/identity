@@ -29,6 +29,7 @@ type userService struct {
 	userRepo        repository.UserRepository
 	featureFlagRepo repository.FeatureFlagRepository
 	userFFRepo      repository.UserFeatureFlagRepository
+	audit           AuditLogger
 }
 
 // NewUserService creates a new user service
@@ -36,11 +37,13 @@ func NewUserService(
 	userRepo repository.UserRepository,
 	featureFlagRepo repository.FeatureFlagRepository,
 	userFFRepo repository.UserFeatureFlagRepository,
+	audit AuditLogger,
 ) UserService {
 	return &userService{
 		userRepo:        userRepo,
 		featureFlagRepo: featureFlagRepo,
 		userFFRepo:      userFFRepo,
+		audit:           audit,
 	}
 }
 
@@ -61,6 +64,8 @@ func (s *userService) CreateUser(ctx context.Context, req *dto.CreateUserRequest
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
+
+	s.audit.Log(ctx, nil, AuditUserCreated, "user", fmt.Sprint(user.ID), map[string]any{"email": user.Email})
 
 	return s.toUserResponse(user), nil
 }
@@ -129,6 +134,8 @@ func (s *userService) UpdateUser(ctx context.Context, id uint, req *dto.UpdateUs
 		return nil, fmt.Errorf("failed to update user: %w", err)
 	}
 
+	s.audit.Log(ctx, nil, AuditUserUpdated, "user", fmt.Sprint(user.ID), map[string]any{"email": user.Email, "enabled": user.Enabled})
+
 	return s.toUserResponse(user), nil
 }
 
@@ -146,6 +153,8 @@ func (s *userService) DeleteUser(ctx context.Context, id uint) error {
 	if err := s.userRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("failed to delete user: %w", err)
 	}
+
+	s.audit.Log(ctx, nil, AuditUserDeleted, "user", fmt.Sprint(id), nil)
 
 	return nil
 }
@@ -215,6 +224,8 @@ func (s *userService) AssignFeatureFlagToUser(ctx context.Context, userID uint, 
 		return fmt.Errorf("failed to assign feature flag: %w", err)
 	}
 
+	s.audit.Log(ctx, nil, AuditUserFlagAssigned, "user_feature_flag", flag.Key, map[string]any{"user_id": userID})
+
 	return nil
 }
 
@@ -242,6 +253,8 @@ func (s *userService) UnassignFeatureFlagFromUser(ctx context.Context, userID ui
 	if err := s.userFFRepo.UnassignFeatureFlagFromUser(ctx, userID, flag.ID); err != nil {
 		return fmt.Errorf("failed to unassign feature flag: %w", err)
 	}
+
+	s.audit.Log(ctx, nil, AuditUserFlagRemoved, "user_feature_flag", flag.Key, map[string]any{"user_id": userID})
 
 	return nil
 }

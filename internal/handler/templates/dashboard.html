@@ -25,6 +25,10 @@
                 hx-get="/admin/users"
                 hx-target="#content"
                 hx-push-url="true">Users</button>
+        <button class="tab {{if eq .ActiveTab "audit"}}active{{end}}"
+                hx-get="/admin/audit"
+                hx-target="#content"
+                hx-push-url="true">Audit Log</button>
     </div>
 
     <div id="content">
@@ -38,6 +42,8 @@
     {{template "flags-content" .}}
 {{else if eq .ActiveTab "users"}}
     {{template "users-content" .}}
+{{else if eq .ActiveTab "audit"}}
+    {{template "audit-content" .}}
 {{end}}
 {{end}}
 
@@ -122,8 +128,33 @@
 
 {{define "users-content"}}
 <div class="card">
-    <h2>User Feature Flags</h2>
-    <p style="color: #666; margin-bottom: 15px;">Manage which feature flags are enabled for each user</p>
+    <div class="section-header">
+        <h2>Users</h2>
+        <button class="btn btn-primary" onclick="document.getElementById('new-user-form').style.display = document.getElementById('new-user-form').style.display === 'none' ? 'block' : 'none'">
+            + New User
+        </button>
+    </div>
+    <p style="color: #666; margin-bottom: 15px;">Manage users, their sessions and feature flags</p>
+
+    <div id="new-user-form" style="display: none; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px;">
+        <form hx-post="/admin/users" hx-target="#users-list" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful) this.reset()">
+            <div style="display: flex; gap: 10px; align-items: end;">
+                <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                    <label for="new-user-name">Name</label>
+                    <input type="text" id="new-user-name" name="name" required placeholder="Name">
+                </div>
+                <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                    <label for="new-user-email">Email</label>
+                    <input type="email" id="new-user-email" name="email" required placeholder="email@example.com">
+                </div>
+                <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                    <label for="new-user-password">Password</label>
+                    <input type="password" id="new-user-password" name="password" required minlength="6" placeholder="Password">
+                </div>
+                <button type="submit" class="btn btn-success">Create</button>
+            </div>
+        </form>
+    </div>
 
     <div id="users-list">
         {{template "users-list" .}}
@@ -139,11 +170,12 @@
             <th>Email</th>
             <th>Status</th>
             <th>Feature Flags</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
         {{range .Users}}
-        <tr>
+        <tr id="user-row-{{.ID}}">
             <td>{{.Name}}</td>
             <td>{{.Email}}</td>
             <td>
@@ -161,16 +193,111 @@
                     Manage Flags ({{.FlagCount}})
                 </button>
             </td>
+            <td>
+                <button class="btn btn-primary"
+                        hx-get="/admin/users/{{.ID}}/edit"
+                        hx-target="#user-edit-modal"
+                        hx-swap="innerHTML">
+                    Edit
+                </button>
+                <button class="btn"
+                        style="background-color: #f39c12; color: white;"
+                        hx-post="/admin/users/{{.ID}}/force-logout"
+                        hx-target="#users-list"
+                        hx-swap="innerHTML"
+                        hx-confirm="Log this user out of all sessions?">
+                    Log out
+                </button>
+                <button class="btn btn-danger"
+                        hx-delete="/admin/users/{{.ID}}"
+                        hx-target="#users-list"
+                        hx-swap="innerHTML"
+                        hx-confirm="Delete this user? This cannot be undone.">
+                    Delete
+                </button>
+            </td>
         </tr>
         {{else}}
         <tr>
-            <td colspan="4" style="text-align: center; color: #666;">No users found</td>
+            <td colspan="5" style="text-align: center; color: #666;">No users found</td>
         </tr>
         {{end}}
     </tbody>
 </table>
 
 <div id="user-flags-modal"></div>
+<div id="user-edit-modal"></div>
+{{end}}
+
+{{define "user-edit-modal"}}
+<div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;">
+    <div class="card" style="width: 100%; max-width: 500px;">
+        <div class="section-header">
+            <h2>Edit {{.SelectedUser.Name}}</h2>
+            <button class="btn" onclick="document.getElementById('user-edit-modal').innerHTML = ''">&times; Close</button>
+        </div>
+
+        <form hx-put="/admin/users/{{.SelectedUser.ID}}"
+              hx-target="#users-list"
+              hx-swap="innerHTML"
+              hx-on::after-request="if(event.detail.successful) document.getElementById('user-edit-modal').innerHTML = ''">
+            <div class="form-group">
+                <label for="edit-user-name">Name</label>
+                <input type="text" id="edit-user-name" name="name" required value="{{.SelectedUser.Name}}">
+            </div>
+            <div class="form-group">
+                <label for="edit-user-email">Email</label>
+                <input type="email" id="edit-user-email" name="email" required value="{{.SelectedUser.Email}}">
+            </div>
+            <div class="form-group">
+                <label for="edit-user-enabled">Status</label>
+                <select id="edit-user-enabled" name="enabled">
+                    <option value="true" {{if .SelectedUser.Enabled}}selected{{end}}>Active</option>
+                    <option value="false" {{if not .SelectedUser.Enabled}}selected{{end}}>Disabled</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="edit-user-password">New password (leave blank to keep current)</label>
+                <input type="password" id="edit-user-password" name="password" minlength="6" placeholder="••••••••">
+            </div>
+            <button type="submit" class="btn btn-success">Save</button>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "audit-content"}}
+<div class="card">
+    <h2>Audit Log</h2>
+    <p style="color: #666; margin-bottom: 15px;">Latest 100 auth and feature flag events</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Action</th>
+                <th>Actor</th>
+                <th>Target</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .AuditLogs}}
+            <tr>
+                <td style="white-space: nowrap;">{{.CreatedAt}}</td>
+                <td><code>{{.Action}}</code></td>
+                <td>{{.Actor}}</td>
+                <td>{{.Target}}</td>
+                <td><code style="font-size: 12px;">{{.Details}}</code></td>
+            </tr>
+            {{else}}
+            <tr>
+                <td colspan="5" style="text-align: center; color: #666;">No audit entries yet</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
 {{end}}
 
 {{define "user-flags-modal"}}

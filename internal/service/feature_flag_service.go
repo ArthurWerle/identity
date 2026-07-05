@@ -28,13 +28,15 @@ type FeatureFlagService interface {
 type featureFlagService struct {
 	featureFlagRepo repository.FeatureFlagRepository
 	userFFRepo      repository.UserFeatureFlagRepository
+	audit           AuditLogger
 }
 
 // NewFeatureFlagService creates a new feature flag service
-func NewFeatureFlagService(featureFlagRepo repository.FeatureFlagRepository, userFFRepo repository.UserFeatureFlagRepository) FeatureFlagService {
+func NewFeatureFlagService(featureFlagRepo repository.FeatureFlagRepository, userFFRepo repository.UserFeatureFlagRepository, audit AuditLogger) FeatureFlagService {
 	return &featureFlagService{
 		featureFlagRepo: featureFlagRepo,
 		userFFRepo:      userFFRepo,
+		audit:           audit,
 	}
 }
 
@@ -55,6 +57,8 @@ func (s *featureFlagService) CreateFeatureFlag(ctx context.Context, req *dto.Cre
 	if err := s.featureFlagRepo.Create(ctx, flag); err != nil {
 		return nil, fmt.Errorf("failed to create feature flag: %w", err)
 	}
+
+	s.audit.Log(ctx, nil, AuditFlagCreated, "feature_flag", flag.Key, map[string]any{"enabled": flag.Enabled})
 
 	return s.toFeatureFlagResponse(flag), nil
 }
@@ -128,13 +132,19 @@ func (s *featureFlagService) UpdateFeatureFlag(ctx context.Context, id uint, req
 		return nil, fmt.Errorf("failed to update feature flag: %w", err)
 	}
 
+	action := AuditFlagUpdated
+	if req.Enabled != nil {
+		action = AuditFlagToggled
+	}
+	s.audit.Log(ctx, nil, action, "feature_flag", flag.Key, map[string]any{"enabled": flag.Enabled})
+
 	return s.toFeatureFlagResponse(flag), nil
 }
 
 // DeleteFeatureFlag deletes a feature flag
 func (s *featureFlagService) DeleteFeatureFlag(ctx context.Context, id uint) error {
 	// Check if feature flag exists
-	_, err := s.featureFlagRepo.GetByID(ctx, id)
+	flag, err := s.featureFlagRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New("feature flag not found")
@@ -145,6 +155,8 @@ func (s *featureFlagService) DeleteFeatureFlag(ctx context.Context, id uint) err
 	if err := s.featureFlagRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("failed to delete feature flag: %w", err)
 	}
+
+	s.audit.Log(ctx, nil, AuditFlagDeleted, "feature_flag", flag.Key, nil)
 
 	return nil
 }

@@ -12,22 +12,35 @@ import (
 const (
 	// SessionCookieName is the name of the session cookie
 	SessionCookieName = "session_id"
-	// SessionCookieMaxAge is the max age of the session cookie in seconds (24 hours)
-	SessionCookieMaxAge = 86400
+	// SessionHeaderName carries the session for service-to-service calls
+	SessionHeaderName = "X-Session-ID"
 )
 
 // AuthHandler handles authentication-related HTTP requests
 type AuthHandler struct {
-	authService service.AuthService
-	logger      *slog.Logger
+	authService  service.AuthService
+	logger       *slog.Logger
+	cookieMaxAge int
+	cookieSecure bool
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(authService service.AuthService, logger *slog.Logger) *AuthHandler {
+func NewAuthHandler(authService service.AuthService, logger *slog.Logger, cookieSecure bool) *AuthHandler {
 	return &AuthHandler{
-		authService: authService,
-		logger:      logger,
+		authService:  authService,
+		logger:       logger,
+		cookieMaxAge: int(authService.SessionDuration().Seconds()),
+		cookieSecure: cookieSecure,
 	}
+}
+
+// sessionIDFromRequest extracts the session ID from the cookie, falling back
+// to the X-Session-ID header.
+func sessionIDFromRequest(c *gin.Context) string {
+	if sessionID, err := c.Cookie(SessionCookieName); err == nil && sessionID != "" {
+		return sessionID
+	}
+	return c.GetHeader(SessionHeaderName)
 }
 
 // Login godoc
@@ -66,11 +79,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.SetCookie(
 		SessionCookieName,
 		resp.SessionID,
-		SessionCookieMaxAge,
+		h.cookieMaxAge,
 		"/",
 		"",
-		false, // Secure (set to true in production with HTTPS)
-		true,  // HttpOnly
+		h.cookieSecure,
+		true, // HttpOnly
 	)
 
 	h.logger.Info("user logged in", "user_id", resp.User.ID, "email", resp.User.Email)
@@ -86,9 +99,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 // @Failure 400 {object} dto.ErrorResponse
 // @Router /api/v1/auth/logout [post]
 func (h *AuthHandler) Logout(c *gin.Context) {
-	sessionID, err := c.Cookie(SessionCookieName)
-	if err != nil {
-		// No session cookie, nothing to logout
+	sessionID := sessionIDFromRequest(c)
+	if sessionID == "" {
+		// No session, nothing to logout
 		c.JSON(http.StatusOK, dto.SuccessResponse{
 			Message: "Logged out successfully",
 		})
@@ -107,7 +120,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		-1,
 		"/",
 		"",
-		false,
+		h.cookieSecure,
 		true,
 	)
 
@@ -115,41 +128,6 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.SuccessResponse{
 		Message: "Logged out successfully",
 	})
-}
-
-// Register godoc
-// @Summary Register new user
-// @Description Create a new user account
-// @Tags auth
-// @Accept json
-// @Produce json
-// @Param request body dto.RegisterRequest true "Registration details"
-// @Success 201 {object} dto.UserResponse
-// @Failure 400 {object} dto.ErrorResponse
-// @Router /api/v1/auth/register [post]
-func (h *AuthHandler) Register(c *gin.Context) {
-	var req dto.RegisterRequest
-	if err := c.ShouldBind(&req); err != nil {
-		h.logger.Error("failed to bind register request", "error", err)
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Error:   "invalid_request",
-			Message: "Invalid request body",
-		})
-		return
-	}
-
-	resp, err := h.authService.Register(c.Request.Context(), &req)
-	if err != nil {
-		h.logger.Error("registration failed", "error", err, "email", req.Email)
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Error:   "registration_failed",
-			Message: err.Error(),
-		})
-		return
-	}
-
-	h.logger.Info("user registered", "user_id", resp.ID, "email", resp.Email)
-	c.JSON(http.StatusCreated, resp)
 }
 
 // ValidateSession godoc
@@ -204,8 +182,8 @@ func (h *AuthHandler) ValidateSession(c *gin.Context) {
 // @Failure 401 {object} dto.ErrorResponse
 // @Router /api/v1/auth/me [get]
 func (h *AuthHandler) Me(c *gin.Context) {
-	sessionID, err := c.Cookie(SessionCookieName)
-	if err != nil {
+	sessionID := sessionIDFromRequest(c)
+	if sessionID == "" {
 		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
 			Error:   "unauthorized",
 			Message: "Not authenticated",

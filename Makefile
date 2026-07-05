@@ -1,4 +1,4 @@
-.PHONY: help build run test test-coverage lint fmt clean docker-build docker-up docker-down migrate-up migrate-down migrate-create swagger deps
+.PHONY: help build run test test-coverage lint fmt clean docker-build docker-up docker-down docker-logs staging-up staging-down staging-logs migrate-create swagger deps
 
 # Variables
 APP_NAME=identity-service
@@ -59,51 +59,38 @@ docker-build: ## Build Docker image
 	@echo "Building Docker image..."
 	@docker build -t $(DOCKER_IMAGE) .
 
-docker-up: ## Start all services with docker-compose
+docker-up: ## Start all services with docker-compose (prod)
 	@echo "Starting services with docker-compose..."
-	@docker-compose up -d
+	@docker compose --env-file stack.env up -d --build
 
-docker-down: ## Stop all services
+docker-down: ## Stop all services (prod)
 	@echo "Stopping services..."
-	@docker-compose down
+	@docker compose --env-file stack.env down
 
-docker-logs: ## View docker-compose logs
-	@docker-compose logs -f
+docker-logs: ## View docker-compose logs (prod)
+	@docker compose --env-file stack.env logs -f
 
-# Database migration commands (using atlas)
-migrate-up: ## Run database migrations
-	@echo "Running migrations..."
-	@if command -v atlas > /dev/null; then \
-		atlas schema apply --env local --auto-approve; \
-	else \
-		echo "Atlas not installed. Install it from https://atlasgo.io/getting-started#installation"; \
-	fi
+staging-up: ## Start all services with staging docker-compose
+	@echo "Starting staging services..."
+	@docker compose -f docker-compose.staging.yml --env-file stack.env up -d --build
 
-migrate-down: ## Rollback last migration
-	@echo "Rolling back migration..."
-	@echo "Note: Atlas doesn't have a traditional 'down' migration. Use 'atlas schema apply' with a previous state."
+staging-down: ## Stop staging services
+	@echo "Stopping staging services..."
+	@docker compose -f docker-compose.staging.yml --env-file stack.env down
 
-migrate-status: ## Check migration status
-	@echo "Checking migration status..."
-	@if command -v atlas > /dev/null; then \
-		atlas schema inspect --env local; \
-	else \
-		echo "Atlas not installed."; \
-	fi
+staging-logs: ## View staging docker-compose logs
+	@docker compose -f docker-compose.staging.yml --env-file stack.env logs -f
 
+# Migrations are embedded SQL files in internal/migrations, applied
+# automatically on boot (see internal/migrations/migrations.go)
 migrate-create: ## Create a new migration file (usage: make migrate-create NAME=migration_name)
 	@if [ -z "$(NAME)" ]; then \
 		echo "Error: NAME is required. Usage: make migrate-create NAME=my_migration"; \
 		exit 1; \
 	fi
-	@TIMESTAMP=$$(date +%Y%m%d%H%M%S); \
-	FILENAME="db/migrations/$${TIMESTAMP}_$(NAME).sql"; \
+	@TIMESTAMP=$$(date +%Y%m%d); \
+	FILENAME="internal/migrations/$${TIMESTAMP}_$(NAME).sql"; \
 	touch "$$FILENAME"; \
-	echo "-- Migration: $(NAME)" > "$$FILENAME"; \
-	echo "-- Created: $$(date)" >> "$$FILENAME"; \
-	echo "" >> "$$FILENAME"; \
-	echo "-- Add your SQL statements below" >> "$$FILENAME"; \
-	echo "" >> "$$FILENAME"; \
 	echo "Created migration: $$FILENAME"
 
 # Swagger documentation
@@ -127,18 +114,16 @@ deps: ## Install project dependencies
 # Database helpers
 db-start: ## Start only the database
 	@echo "Starting PostgreSQL database..."
-	@docker-compose up -d postgres
+	@docker compose --env-file stack.env up -d postgres
 
 db-stop: ## Stop the database
 	@echo "Stopping PostgreSQL database..."
-	@docker-compose stop postgres
+	@docker compose --env-file stack.env stop postgres
 
 db-reset: ## Reset the database (WARNING: deletes all data)
 	@echo "Resetting database..."
-	@docker-compose down -v
-	@docker-compose up -d postgres
-	@sleep 3
-	@make migrate-up
+	@docker compose --env-file stack.env down -v
+	@docker compose --env-file stack.env up -d postgres
 
 # Development workflow
 dev: db-start ## Start development environment

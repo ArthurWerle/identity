@@ -5,11 +5,13 @@ import (
 	"html/template"
 	"identity/internal/middleware"
 	"identity/internal/model"
+	"identity/internal/repository"
 	"identity/internal/service"
 	"identity/internal/service/dto"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,8 +24,10 @@ type WebHandler struct {
 	authService        service.AuthService
 	userService        service.UserService
 	featureFlagService service.FeatureFlagService
+	auditLogRepo       repository.AuditLogRepository
 	logger             *slog.Logger
 	templates          *template.Template
+	cookieSecure       bool
 }
 
 // NewWebHandler creates a new web handler
@@ -31,7 +35,9 @@ func NewWebHandler(
 	authService service.AuthService,
 	userService service.UserService,
 	featureFlagService service.FeatureFlagService,
+	auditLogRepo repository.AuditLogRepository,
 	logger *slog.Logger,
+	cookieSecure bool,
 ) *WebHandler {
 	tmpl := template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
@@ -39,8 +45,10 @@ func NewWebHandler(
 		authService:        authService,
 		userService:        userService,
 		featureFlagService: featureFlagService,
+		auditLogRepo:       auditLogRepo,
 		logger:             logger,
 		templates:          tmpl,
+		cookieSecure:       cookieSecure,
 	}
 }
 
@@ -55,6 +63,16 @@ type PageData struct {
 	Users        []UserWithFlagCount
 	SelectedUser *model.User
 	AllFlags     []FlagWithAssignment
+	AuditLogs    []AuditRow
+}
+
+// AuditRow is a template-friendly audit log entry
+type AuditRow struct {
+	CreatedAt string
+	Action    string
+	Actor     string
+	Target    string
+	Details   string
 }
 
 // FlagWithUserCount represents a feature flag with user count
@@ -119,10 +137,10 @@ func (h *WebHandler) LoginSubmit(c *gin.Context) {
 	c.SetCookie(
 		SessionCookieName,
 		resp.SessionID,
-		SessionCookieMaxAge,
+		int(h.authService.SessionDuration().Seconds()),
 		"/",
 		"",
-		false,
+		h.cookieSecure,
 		true,
 	)
 
@@ -136,7 +154,7 @@ func (h *WebHandler) Logout(c *gin.Context) {
 		_ = h.authService.Logout(c.Request.Context(), sessionID)
 	}
 
-	c.SetCookie(SessionCookieName, "", -1, "/", "", false, true)
+	c.SetCookie(SessionCookieName, "", -1, "/", "", h.cookieSecure, true)
 	c.Redirect(http.StatusFound, "/admin/login")
 }
 
@@ -385,7 +403,188 @@ func (h *WebHandler) ToggleUserFlag(c *gin.Context) {
 	h.UserFlags(c)
 }
 
+// CreateUser creates a new user from the admin UI
+func (h *WebHandler) CreateUser(c *gin.Context) {
+	name := c.PostForm("name")
+	email := c.PostForm("email")
+	password := c.PostForm("password")
+
+	if name == "" || email == "" || password == "" {
+		c.String(http.StatusBadRequest, "Name, email and password are required")
+		return
+	}
+
+	_, err := h.authService.Register(c.Request.Context(), &dto.RegisterRequest{
+		Name:     name,
+		Email:    email,
+		Password: password,
+	})
+	if err != nil {
+		h.logger.Error("failed to create user", "error", err)
+	}
+
+	h.renderUsersList(c)
+}
+
+// EditUserModal renders the edit form for a user
+func (h *WebHandler) EditUserModal(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.String(http.StatusBadRequest, "Invalid user ID")
+		return
+	}
+
+	userResp, err := h.userService.GetUser(c.Request.Context(), uint(id))
+	if err != nil {
+		c.String(http.StatusNotFound, "User not found")
+		return
+	}
+
+	data := PageData{
+		SelectedUser: &model.User{
+			ID:      userResp.ID,
+			Name:    userResp.Name,
+			Email:   userResp.Email,
+			Enabled: userResp.Enabled,
+		},
+	}
+	h.templates.ExecuteTemplate(c.Writer, "user-edit-modal", data)
+}
+
+// UpdateUser updates a user from the admin UI (name/email/enabled, optional new password)
+func (h *WebHandler) UpdateUser(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.String(http.StatusBadRequest, "Invalid user ID")
+		return
+	}
+
+	name := c.PostForm("name")
+	email := c.PostForm("email")
+	enabled := c.PostForm("enabled") == "true"
+
+	_, err = h.userService.UpdateUser(c.Request.Context(), uint(id), &dto.UpdateUserRequest{
+		Name:    &name,
+		Email:   &email,
+		Enabled: &enabled,
+	})
+	if err != nil {
+		h.logger.Error("failed to update user", "error", err)
+	}
+
+	if password := c.PostForm("password"); password != "" {
+		if err := h.authService.SetPassword(c.Request.Context(), uint(id), password); err != nil {
+			h.logger.Error("failed to set password", "error", err)
+		}
+	}
+
+	h.renderUsersList(c)
+}
+
+// DeleteUser deletes a user from the admin UI
+func (h *WebHandler) DeleteUser(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.String(http.StatusBadRequest, "Invalid user ID")
+		return
+	}
+
+	if current := middleware.GetUserFromContext(c); current != nil && current.ID == uint(id) {
+		c.String(http.StatusBadRequest, "You cannot delete your own account")
+		return
+	}
+
+	if err := h.userService.DeleteUser(c.Request.Context(), uint(id)); err != nil {
+		h.logger.Error("failed to delete user", "error", err)
+	}
+
+	// Also kill any active sessions for the deleted user
+	if err := h.authService.ForceLogout(c.Request.Context(), nil, uint(id)); err != nil {
+		h.logger.Error("failed to clear sessions of deleted user", "error", err)
+	}
+
+	h.renderUsersList(c)
+}
+
+// ForceLogoutUser deletes all sessions for a user ("log people out" button)
+func (h *WebHandler) ForceLogoutUser(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.String(http.StatusBadRequest, "Invalid user ID")
+		return
+	}
+
+	if err := h.authService.ForceLogout(c.Request.Context(), nil, uint(id)); err != nil {
+		h.logger.Error("failed to force logout user", "error", err)
+	}
+
+	h.renderUsersList(c)
+}
+
+// AuditTab renders the audit log tab
+func (h *WebHandler) AuditTab(c *gin.Context) {
+	user := middleware.GetUserFromContext(c)
+	if user == nil {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	data := PageData{
+		Title:     "Audit Log",
+		User:      user,
+		ActiveTab: "audit",
+		AuditLogs: h.loadAuditLogs(c),
+	}
+
+	if c.GetHeader("HX-Request") == "true" {
+		h.templates.ExecuteTemplate(c.Writer, "audit-content", data)
+		return
+	}
+
+	h.renderTemplate(c, "layout.html", "dashboard.html", data)
+}
+
 // Helper methods
+
+func (h *WebHandler) renderUsersList(c *gin.Context) {
+	data := PageData{
+		Users: h.loadUsers(c),
+	}
+	h.templates.ExecuteTemplate(c.Writer, "users-list", data)
+}
+
+func (h *WebHandler) loadAuditLogs(c *gin.Context) []AuditRow {
+	logs, _, err := h.auditLogRepo.GetAll(c.Request.Context(), 100, 0)
+	if err != nil {
+		h.logger.Error("failed to load audit logs", "error", err)
+		return nil
+	}
+
+	rows := make([]AuditRow, 0, len(logs))
+	for _, entry := range logs {
+		actor := "-"
+		if entry.Actor != nil && entry.Actor.Name != "" {
+			actor = entry.Actor.Name
+		} else if entry.ActorUserID != nil {
+			actor = "user #" + strconv.FormatUint(uint64(*entry.ActorUserID), 10)
+		}
+
+		target := entry.TargetType
+		if entry.TargetID != "" {
+			target += " " + entry.TargetID
+		}
+
+		rows = append(rows, AuditRow{
+			CreatedAt: entry.CreatedAt.Format(time.RFC3339),
+			Action:    entry.Action,
+			Actor:     actor,
+			Target:    target,
+			Details:   string(entry.Details),
+		})
+	}
+
+	return rows
+}
 
 func (h *WebHandler) loadFlags(c *gin.Context) []FlagWithUserCount {
 	pagination := &dto.PaginationParams{Page: 1, PageSize: 100}

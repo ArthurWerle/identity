@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: ${POSTGRES_CONTAINER_NAME:-identity-postgres}
+    container_name: ${POSTGRES_CONTAINER_NAME:-identity-postgres-staging}
     restart: unless-stopped
     env_file:
       - stack.env
@@ -10,9 +10,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "${POSTGRES_PORT:-5434}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data_staging:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -25,7 +25,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ${SERVICE_CONTAINER_NAME:-identity}
+    container_name: ${SERVICE_CONTAINER_NAME:-identity-staging}
     env_file:
       - stack.env
     environment:
@@ -41,20 +41,20 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
     ports:
-      - "${SERVICE_PORT:-8083}:${SERVER_PORT:-8080}"
+      - "${SERVICE_PORT:-9083}:${SERVER_PORT:-8080}"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - identity-network
-      - bff_back-end
+      - staging_bff_back-end
 
 volumes:
-  postgres_data:
+  postgres_data_staging:
 
 networks:
   identity-network:
     driver: bridge
-  bff_back-end:
+  staging_bff_back-end:
     external: true

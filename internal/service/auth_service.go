@@ -16,10 +16,14 @@ import (
 )
 
 const (
-	// SessionDuration is the default session duration
-	SessionDuration = 24 * time.Hour
+	// DefaultSessionDuration is used when no duration is configured
+	DefaultSessionDuration = 720 * time.Hour
 	// BcryptCost is the cost factor for bcrypt hashing
 	BcryptCost = 10
+	// slideThreshold avoids a DB write on every validation: the expiry is
+	// only pushed forward once it is more than this much behind the full
+	// sliding window.
+	slideThreshold = time.Hour
 )
 
 // AuthService defines the interface for authentication business logic
@@ -30,23 +34,39 @@ type AuthService interface {
 	ValidateSession(ctx context.Context, sessionID string) (*model.User, error)
 	GetUserBySession(ctx context.Context, sessionID string) (*dto.UserResponse, error)
 	SetPassword(ctx context.Context, userID uint, password string) error
+	ForceLogout(ctx context.Context, actorUserID *uint, userID uint) error
+	SessionDuration() time.Duration
 }
 
 // authService implements AuthService
 type authService struct {
-	userRepo    repository.UserRepository
-	sessionRepo repository.SessionRepository
+	userRepo        repository.UserRepository
+	sessionRepo     repository.SessionRepository
+	audit           AuditLogger
+	sessionDuration time.Duration
 }
 
 // NewAuthService creates a new auth service
 func NewAuthService(
 	userRepo repository.UserRepository,
 	sessionRepo repository.SessionRepository,
+	audit AuditLogger,
+	sessionDuration time.Duration,
 ) AuthService {
-	return &authService{
-		userRepo:    userRepo,
-		sessionRepo: sessionRepo,
+	if sessionDuration <= 0 {
+		sessionDuration = DefaultSessionDuration
 	}
+	return &authService{
+		userRepo:        userRepo,
+		sessionRepo:     sessionRepo,
+		audit:           audit,
+		sessionDuration: sessionDuration,
+	}
+}
+
+// SessionDuration returns the configured session lifetime
+func (s *authService) SessionDuration() time.Duration {
+	return s.sessionDuration
 }
 
 // Login authenticates a user and creates a session
@@ -55,6 +75,7 @@ func (s *authService) Login(ctx context.Context, req *dto.LoginRequest) (*dto.Lo
 	user, err := s.userRepo.GetByEmail(ctx, req.Email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			s.audit.Log(ctx, nil, AuditLoginFailed, "user", "", map[string]any{"email": req.Email, "reason": "unknown email"})
 			return nil, errors.New("invalid email or password")
 		}
 		return nil, fmt.Errorf("failed to get user: %w", err)
@@ -62,11 +83,13 @@ func (s *authService) Login(ctx context.Context, req *dto.LoginRequest) (*dto.Lo
 
 	// Check if user is enabled
 	if !user.Enabled {
+		s.audit.Log(ctx, nil, AuditLoginFailed, "user", fmt.Sprint(user.ID), map[string]any{"email": req.Email, "reason": "account disabled"})
 		return nil, errors.New("user account is disabled")
 	}
 
 	// Verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		s.audit.Log(ctx, nil, AuditLoginFailed, "user", fmt.Sprint(user.ID), map[string]any{"email": req.Email, "reason": "wrong password"})
 		return nil, errors.New("invalid email or password")
 	}
 
@@ -80,7 +103,7 @@ func (s *authService) Login(ctx context.Context, req *dto.LoginRequest) (*dto.Lo
 	session := &model.Session{
 		ID:        sessionID,
 		UserID:    user.ID,
-		ExpiresAt: time.Now().Add(SessionDuration),
+		ExpiresAt: time.Now().Add(s.sessionDuration),
 	}
 
 	if err := s.sessionRepo.Create(ctx, session); err != nil {
@@ -93,6 +116,9 @@ func (s *authService) Login(ctx context.Context, req *dto.LoginRequest) (*dto.Lo
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		// Log but don't fail
 	}
+
+	actorID := user.ID
+	s.audit.Log(ctx, &actorID, AuditLoginSuccess, "user", fmt.Sprint(user.ID), map[string]any{"email": user.Email})
 
 	return &dto.LoginResponse{
 		User: dto.UserResponse{
@@ -115,8 +141,17 @@ func (s *authService) Logout(ctx context.Context, sessionID string) error {
 		return errors.New("session ID is required")
 	}
 
+	var actorID *uint
+	if session, err := s.sessionRepo.GetByID(ctx, sessionID); err == nil {
+		actorID = &session.UserID
+	}
+
 	if err := s.sessionRepo.Delete(ctx, sessionID); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
+	}
+
+	if actorID != nil {
+		s.audit.Log(ctx, actorID, AuditLogout, "user", fmt.Sprint(*actorID), nil)
 	}
 
 	return nil
@@ -147,6 +182,8 @@ func (s *authService) Register(ctx context.Context, req *dto.RegisterRequest) (*
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
+
+	s.audit.Log(ctx, nil, AuditUserRegistered, "user", fmt.Sprint(user.ID), map[string]any{"email": user.Email})
 
 	return &dto.UserResponse{
 		ID:        user.ID,
@@ -182,6 +219,16 @@ func (s *authService) ValidateSession(ctx context.Context, sessionID string) (*m
 	// Check if user is still enabled
 	if !session.User.Enabled {
 		return nil, errors.New("user account is disabled")
+	}
+
+	// Sliding expiration: push the expiry forward, but only once it has
+	// drifted more than slideThreshold behind the full window, so frequent
+	// validations don't cause a DB write each time.
+	newExpiry := time.Now().Add(s.sessionDuration)
+	if newExpiry.Sub(session.ExpiresAt) > slideThreshold {
+		if err := s.sessionRepo.UpdateExpiresAt(ctx, sessionID, newExpiry); err == nil {
+			session.ExpiresAt = newExpiry
+		}
 	}
 
 	return &session.User, nil
@@ -224,6 +271,19 @@ func (s *authService) SetPassword(ctx context.Context, userID uint, password str
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return fmt.Errorf("failed to update password: %w", err)
 	}
+
+	s.audit.Log(ctx, nil, AuditPasswordSet, "user", fmt.Sprint(userID), nil)
+
+	return nil
+}
+
+// ForceLogout deletes all sessions for a user (admin action)
+func (s *authService) ForceLogout(ctx context.Context, actorUserID *uint, userID uint) error {
+	if err := s.sessionRepo.DeleteByUserID(ctx, userID); err != nil {
+		return fmt.Errorf("failed to delete user sessions: %w", err)
+	}
+
+	s.audit.Log(ctx, actorUserID, AuditForceLogout, "user", fmt.Sprint(userID), nil)
 
 	return nil
 }

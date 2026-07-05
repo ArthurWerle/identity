@@ -172,7 +172,7 @@ func TestUserService_CreateUser(t *testing.T) {
 	userRepo := newMockUserRepository()
 	featureFlagRepo := newMockFeatureFlagRepository()
 	userFFRepo := newMockUserFeatureFlagRepository()
-	svc := NewUserService(userRepo, featureFlagRepo, userFFRepo)
+	svc := NewUserService(userRepo, featureFlagRepo, userFFRepo, newNoopAudit())
 
 	tests := []struct {
 		name    string
@@ -217,7 +217,7 @@ func TestUserService_GetUser(t *testing.T) {
 	userRepo := newMockUserRepository()
 	featureFlagRepo := newMockFeatureFlagRepository()
 	userFFRepo := newMockUserFeatureFlagRepository()
-	svc := NewUserService(userRepo, featureFlagRepo, userFFRepo)
+	svc := NewUserService(userRepo, featureFlagRepo, userFFRepo, newNoopAudit())
 
 	// Create a test user
 	createReq := &dto.CreateUserRequest{
@@ -262,7 +262,7 @@ func TestUserService_UpdateUser(t *testing.T) {
 	userRepo := newMockUserRepository()
 	featureFlagRepo := newMockFeatureFlagRepository()
 	userFFRepo := newMockUserFeatureFlagRepository()
-	svc := NewUserService(userRepo, featureFlagRepo, userFFRepo)
+	svc := NewUserService(userRepo, featureFlagRepo, userFFRepo, newNoopAudit())
 
 	// Create a test user
 	createReq := &dto.CreateUserRequest{
@@ -292,7 +292,7 @@ func TestUserService_DeleteUser(t *testing.T) {
 	userRepo := newMockUserRepository()
 	featureFlagRepo := newMockFeatureFlagRepository()
 	userFFRepo := newMockUserFeatureFlagRepository()
-	svc := NewUserService(userRepo, featureFlagRepo, userFFRepo)
+	svc := NewUserService(userRepo, featureFlagRepo, userFFRepo, newNoopAudit())
 
 	// Create a test user
 	createReq := &dto.CreateUserRequest{

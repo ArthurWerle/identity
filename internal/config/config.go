@@ -11,6 +11,20 @@ type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Log      LogConfig
+	Auth     AuthConfig
+	Admin    AdminConfig
+}
+
+// AuthConfig holds authentication configuration
+type AuthConfig struct {
+	SessionDurationHours int
+	CookieSecure         bool
+}
+
+// AdminConfig holds the initial admin user seed configuration
+type AdminConfig struct {
+	Email    string
+	Password string
 }
 
 // ServerConfig holds server configuration
@@ -49,6 +63,14 @@ func Load() (*Config, error) {
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
+		},
+		Auth: AuthConfig{
+			SessionDurationHours: getEnvAsInt("SESSION_DURATION_HOURS", 720),
+			CookieSecure:         getEnv("COOKIE_SECURE", "false") == "true",
+		},
+		Admin: AdminConfig{
+			Email:    getEnv("ADMIN_EMAIL", ""),
+			Password: getEnv("ADMIN_PASSWORD", ""),
 		},
 	}
 

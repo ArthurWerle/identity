@@ -12,15 +12,27 @@ import (
 const (
 	// SessionCookieName is the name of the session cookie
 	SessionCookieName = "session_id"
+	// SessionHeaderName carries the session for service-to-service calls
+	SessionHeaderName = "X-Session-ID"
 	// UserContextKey is the key used to store the user in the context
 	UserContextKey = "user"
 )
 
+// SessionIDFromRequest extracts the session ID from the cookie, falling back
+// to the X-Session-ID header (used by other services calling on behalf of a
+// logged-in user).
+func SessionIDFromRequest(c *gin.Context) string {
+	if sessionID, err := c.Cookie(SessionCookieName); err == nil && sessionID != "" {
+		return sessionID
+	}
+	return c.GetHeader(SessionHeaderName)
+}
+
 // Auth creates a middleware that validates the session and sets the user in context
 func Auth(authService service.AuthService, logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		sessionID, err := c.Cookie(SessionCookieName)
-		if err != nil {
+		sessionID := SessionIDFromRequest(c)
+		if sessionID == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error":   "unauthorized",
 				"message": "Authentication required",
@@ -40,8 +52,9 @@ func Auth(authService service.AuthService, logger *slog.Logger) gin.HandlerFunc 
 			return
 		}
 
-		// Set user in context
+		// Set user in context (and as audit actor on the request context)
 		c.Set(UserContextKey, user)
+		c.Request = c.Request.WithContext(service.WithActor(c.Request.Context(), user.ID))
 		c.Next()
 	}
 }
@@ -50,8 +63,8 @@ func Auth(authService service.AuthService, logger *slog.Logger) gin.HandlerFunc 
 // If valid, sets the user in context; if not, continues without user
 func OptionalAuth(authService service.AuthService, logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		sessionID, err := c.Cookie(SessionCookieName)
-		if err != nil {
+		sessionID := SessionIDFromRequest(c)
+		if sessionID == "" {
 			c.Next()
 			return
 		}
@@ -63,8 +76,9 @@ func OptionalAuth(authService service.AuthService, logger *slog.Logger) gin.Hand
 			return
 		}
 
-		// Set user in context
+		// Set user in context (and as audit actor on the request context)
 		c.Set(UserContextKey, user)
+		c.Request = c.Request.WithContext(service.WithActor(c.Request.Context(), user.ID))
 		c.Next()
 	}
 }
@@ -87,8 +101,9 @@ func WebAuth(authService service.AuthService, logger *slog.Logger) gin.HandlerFu
 			return
 		}
 
-		// Set user in context
+		// Set user in context (and as audit actor on the request context)
 		c.Set(UserContextKey, user)
+		c.Request = c.Request.WithContext(service.WithActor(c.Request.Context(), user.ID))
 		c.Next()
 	}
 }
