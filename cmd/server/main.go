@@ -6,9 +6,10 @@ import (
 	"identity/internal/config"
 	"identity/internal/handler"
 	"identity/internal/middleware"
-	"identity/internal/model"
+	"identity/internal/migrations"
 	"identity/internal/repository"
 	"identity/internal/service"
+	"identity/internal/service/dto"
 	"log/slog"
 	"net/http"
 	"os"
@@ -56,14 +57,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Auto migrate (optional, for development)
-	if err := db.AutoMigrate(
-		&model.User{},
-		&model.FeatureFlag{},
-		&model.UserFeatureFlag{},
-		&model.Session{},
-	); err != nil {
-		logger.Error("failed to auto migrate", "error", err)
+	// Run migrations
+	if err := migrations.RunMigrations(db, logger); err != nil {
+		logger.Error("failed to run migrations", "error", err)
 		os.Exit(1)
 	}
 
@@ -72,17 +68,26 @@ func main() {
 	featureFlagRepo := repository.NewFeatureFlagRepository(db)
 	userFFRepo := repository.NewUserFeatureFlagRepository(db)
 	sessionRepo := repository.NewSessionRepository(db)
+	auditLogRepo := repository.NewAuditLogRepository(db)
 
 	// Setup services
-	userService := service.NewUserService(userRepo, featureFlagRepo, userFFRepo)
-	featureFlagService := service.NewFeatureFlagService(featureFlagRepo, userFFRepo)
-	authService := service.NewAuthService(userRepo, sessionRepo)
+	auditLogger := service.NewAuditLogger(auditLogRepo, logger)
+	userService := service.NewUserService(userRepo, featureFlagRepo, userFFRepo, auditLogger)
+	featureFlagService := service.NewFeatureFlagService(featureFlagRepo, userFFRepo, auditLogger)
+	sessionDuration := time.Duration(cfg.Auth.SessionDurationHours) * time.Hour
+	authService := service.NewAuthService(userRepo, sessionRepo, auditLogger, sessionDuration)
+
+	// Seed the initial admin user (first boot only)
+	if err := seedAdminUser(cfg, userRepo, authService, logger); err != nil {
+		logger.Error("failed to seed admin user", "error", err)
+		os.Exit(1)
+	}
 
 	// Setup handlers
 	userHandler := handler.NewUserHandler(userService, logger)
 	featureFlagHandler := handler.NewFeatureFlagHandler(featureFlagService, logger)
-	authHandler := handler.NewAuthHandler(authService, logger)
-	webHandler := handler.NewWebHandler(authService, userService, featureFlagService, logger)
+	authHandler := handler.NewAuthHandler(authService, logger, cfg.Auth.CookieSecure)
+	webHandler := handler.NewWebHandler(authService, userService, featureFlagService, auditLogRepo, logger, cfg.Auth.CookieSecure)
 
 	// Setup HTTP server
 	router := setupRouter(cfg, logger, userHandler, featureFlagHandler, authHandler, webHandler, authService)
@@ -119,6 +124,35 @@ func main() {
 	}
 
 	logger.Info("server exited")
+}
+
+// seedAdminUser creates the initial admin account on first boot when the
+// users table is empty and ADMIN_EMAIL/ADMIN_PASSWORD are configured.
+func seedAdminUser(cfg *config.Config, userRepo repository.UserRepository, authService service.AuthService, logger *slog.Logger) error {
+	if cfg.Admin.Email == "" || cfg.Admin.Password == "" {
+		return nil
+	}
+
+	ctx := context.Background()
+	_, total, err := userRepo.GetAll(ctx, 1, 0)
+	if err != nil {
+		return fmt.Errorf("failed to count users: %w", err)
+	}
+	if total > 0 {
+		return nil
+	}
+
+	_, err = authService.Register(ctx, &dto.RegisterRequest{
+		Name:     "Admin",
+		Email:    cfg.Admin.Email,
+		Password: cfg.Admin.Password,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create admin user: %w", err)
+	}
+
+	logger.Info("admin user seeded", "email", cfg.Admin.Email)
+	return nil
 }
 
 func setupLogger(level string) *slog.Logger {
@@ -195,7 +229,6 @@ func setupRouter(
 	// Middleware
 	router.Use(middleware.Recovery(logger))
 	router.Use(middleware.Logger(logger))
-	router.Use(middleware.CORS())
 
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
@@ -208,38 +241,44 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Auth routes (public)
+		// Auth routes (public: login/logout/validate/me self-validate the
+		// session they are given)
 		auth := v1.Group("/auth")
 		{
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/logout", authHandler.Logout)
-			auth.POST("/register", authHandler.Register)
 			auth.GET("/me", authHandler.Me)
 			auth.POST("/validate", authHandler.ValidateSession)
 		}
 
-		// User routes
-		users := v1.Group("/users")
-		{
-			users.POST("", userHandler.CreateUser)
-			users.GET("", userHandler.GetUsers)
-			users.GET("/:id", userHandler.GetUser)
-			users.PUT("/:id", userHandler.UpdateUser)
-			users.DELETE("/:id", userHandler.DeleteUser)
-			users.GET("/:id/feature-flags", userHandler.GetUserFeatureFlags)
-			users.POST("/:id/feature-flags/:key", userHandler.AssignFeatureFlagToUser)
-			users.DELETE("/:id/feature-flags/:key", userHandler.UnassignFeatureFlagFromUser)
-		}
+		// Flag check is public within the docker network so other services
+		// can evaluate flags without a user session
+		v1.GET("/feature-flags/check", featureFlagHandler.CheckFeatureFlag)
 
-		// Feature flag routes
-		featureFlags := v1.Group("/feature-flags")
+		// Everything below requires a valid session (cookie or X-Session-ID)
+		authed := v1.Group("")
+		authed.Use(middleware.Auth(authService, logger))
 		{
-			featureFlags.POST("", featureFlagHandler.CreateFeatureFlag)
-			featureFlags.GET("", featureFlagHandler.GetFeatureFlags)
-			featureFlags.GET("/check", featureFlagHandler.CheckFeatureFlag)
-			featureFlags.GET("/:id", featureFlagHandler.GetFeatureFlag)
-			featureFlags.PUT("/:id", featureFlagHandler.UpdateFeatureFlag)
-			featureFlags.DELETE("/:id", featureFlagHandler.DeleteFeatureFlag)
+			users := authed.Group("/users")
+			{
+				users.POST("", userHandler.CreateUser)
+				users.GET("", userHandler.GetUsers)
+				users.GET("/:id", userHandler.GetUser)
+				users.PUT("/:id", userHandler.UpdateUser)
+				users.DELETE("/:id", userHandler.DeleteUser)
+				users.GET("/:id/feature-flags", userHandler.GetUserFeatureFlags)
+				users.POST("/:id/feature-flags/:key", userHandler.AssignFeatureFlagToUser)
+				users.DELETE("/:id/feature-flags/:key", userHandler.UnassignFeatureFlagFromUser)
+			}
+
+			featureFlags := authed.Group("/feature-flags")
+			{
+				featureFlags.POST("", featureFlagHandler.CreateFeatureFlag)
+				featureFlags.GET("", featureFlagHandler.GetFeatureFlags)
+				featureFlags.GET("/:id", featureFlagHandler.GetFeatureFlag)
+				featureFlags.PUT("/:id", featureFlagHandler.UpdateFeatureFlag)
+				featureFlags.DELETE("/:id", featureFlagHandler.DeleteFeatureFlag)
+			}
 		}
 	}
 
@@ -263,6 +302,12 @@ func setupRouter(
 			protected.DELETE("/flags/:id", webHandler.DeleteFlag)
 			protected.GET("/users/:id/flags", webHandler.UserFlags)
 			protected.POST("/users/:id/flags/:key/toggle", webHandler.ToggleUserFlag)
+			protected.POST("/users", webHandler.CreateUser)
+			protected.GET("/users/:id/edit", webHandler.EditUserModal)
+			protected.PUT("/users/:id", webHandler.UpdateUser)
+			protected.DELETE("/users/:id", webHandler.DeleteUser)
+			protected.POST("/users/:id/force-logout", webHandler.ForceLogoutUser)
+			protected.GET("/audit", webHandler.AuditTab)
 		}
 	}
 

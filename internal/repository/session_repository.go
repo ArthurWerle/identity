@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"identity/internal/model"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -11,6 +12,7 @@ import (
 type SessionRepository interface {
 	Create(ctx context.Context, session *model.Session) error
 	GetByID(ctx context.Context, id string) (*model.Session, error)
+	UpdateExpiresAt(ctx context.Context, id string, expiresAt time.Time) error
 	Delete(ctx context.Context, id string) error
 	DeleteByUserID(ctx context.Context, userID uint) error
 	DeleteExpired(ctx context.Context) error
@@ -42,6 +44,14 @@ func (r *sessionRepository) GetByID(ctx context.Context, id string) (*model.Sess
 		return nil, err
 	}
 	return &session, nil
+}
+
+// UpdateExpiresAt extends a session's expiry (sliding sessions)
+func (r *sessionRepository) UpdateExpiresAt(ctx context.Context, id string, expiresAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Session{}).
+		Where("id = ?", id).
+		Update("expires_at", expiresAt).Error
 }
 
 // Delete soft deletes a session
