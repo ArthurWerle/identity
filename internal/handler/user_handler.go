@@ -102,6 +102,54 @@ func (h *UserHandler) GetUser(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
+// GetPublicUser godoc
+// @Summary Get a user's public info by ID
+// @Description Get a user's minimal public info (id, name) by user ID. Intended
+// @Description for service-to-service calls within the internal network and does
+// @Description not require a user session.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param id path int true "User ID"
+// @Success 200 {object} dto.PublicUserResponse
+// @Failure 400 {object} dto.ErrorResponse
+// @Failure 404 {object} dto.ErrorResponse
+// @Failure 500 {object} dto.ErrorResponse
+// @Router /api/v1/internal/users/{id} [get]
+func (h *UserHandler) GetPublicUser(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:   "invalid_id",
+			Message: "Invalid user ID",
+		})
+		return
+	}
+
+	user, err := h.userService.GetUser(c.Request.Context(), uint(id))
+	if err != nil {
+		if err.Error() == "user not found" {
+			c.JSON(http.StatusNotFound, dto.ErrorResponse{
+				Error:   "not_found",
+				Message: err.Error(),
+			})
+			return
+		}
+		h.logger.Error("failed to get user", "error", err)
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
+			Error:   "retrieval_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, dto.PublicUserResponse{
+		ID:   user.ID,
+		Name: user.Name,
+	})
+}
+
 // GetUsers godoc
 // @Summary Get all users
 // @Description Get a paginated list of all users

@@ -29,6 +29,14 @@ type UserResponse struct {
 	LastLogin *time.Time `json:"last_login,omitempty" example:"2024-01-01T00:00:00Z"`
 }
 
+// PublicUserResponse is the minimal, non-sensitive projection of a user
+// exposed to other services on the internal network (e.g. resolving the
+// creator of a transaction). It deliberately omits email and audit fields.
+type PublicUserResponse struct {
+	ID   uint   `json:"id" example:"1"`
+	Name string `json:"name" example:"John Doe"`
+}
+
 // UserListResponse represents a paginated list of users
 type UserListResponse struct {
 	Users      []UserResponse `json:"users"`
