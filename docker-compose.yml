@@ -49,6 +49,7 @@ services:
     networks:
       - identity-network
       - bff_back-end
+      - financer-transactions_transactions-network
 
 volumes:
   postgres_data:
@@ -57,4 +58,6 @@ networks:
   identity-network:
     driver: bridge
   bff_back-end:
+    external: true
+  financer-transactions_transactions-network:
     external: true
