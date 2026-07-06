@@ -1,7 +1,7 @@
 {{define "content"}}
 <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center;">
     <div class="card" style="width: 100%; max-width: 400px;">
-        <h2 style="text-align: center;">Identity Admin</h2>
+        <h2 style="text-align: center;">Identity Admin{{if .Environment}}<span class="env-badge env-{{.Environment}}">{{.Environment}}</span>{{end}}</h2>
         <p style="text-align: center; color: #666; margin-bottom: 20px;">Sign in to manage feature flags</p>
 
         {{if .Error}}

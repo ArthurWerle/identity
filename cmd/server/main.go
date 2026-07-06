@@ -87,7 +87,7 @@ func main() {
 	userHandler := handler.NewUserHandler(userService, logger)
 	featureFlagHandler := handler.NewFeatureFlagHandler(featureFlagService, logger)
 	authHandler := handler.NewAuthHandler(authService, logger, cfg.Auth.CookieSecure)
-	webHandler := handler.NewWebHandler(authService, userService, featureFlagService, auditLogRepo, logger, cfg.Auth.CookieSecure)
+	webHandler := handler.NewWebHandler(authService, userService, featureFlagService, auditLogRepo, logger, cfg.Auth.CookieSecure, cfg.Environment)
 
 	// Setup HTTP server
 	router := setupRouter(cfg, logger, userHandler, featureFlagHandler, authHandler, webHandler, authService)
