@@ -8,11 +8,12 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Log      LogConfig
-	Auth     AuthConfig
-	Admin    AdminConfig
+	Environment string
+	Server      ServerConfig
+	Database    DatabaseConfig
+	Log         LogConfig
+	Auth        AuthConfig
+	Admin       AdminConfig
 }
 
 // AuthConfig holds authentication configuration
@@ -50,6 +51,7 @@ type LogConfig struct {
 // Load reads configuration from environment variables
 func Load() (*Config, error) {
 	cfg := &Config{
+		Environment: getEnv("APP_ENV", "local"),
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "8080"),
 		},

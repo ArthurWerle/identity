@@ -28,6 +28,7 @@ type WebHandler struct {
 	logger             *slog.Logger
 	templates          *template.Template
 	cookieSecure       bool
+	environment        string
 }
 
 // NewWebHandler creates a new web handler
@@ -38,6 +39,7 @@ func NewWebHandler(
 	auditLogRepo repository.AuditLogRepository,
 	logger *slog.Logger,
 	cookieSecure bool,
+	environment string,
 ) *WebHandler {
 	tmpl := template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
@@ -49,12 +51,14 @@ func NewWebHandler(
 		logger:             logger,
 		templates:          tmpl,
 		cookieSecure:       cookieSecure,
+		environment:        environment,
 	}
 }
 
 // PageData contains common data for all pages
 type PageData struct {
 	Title        string
+	Environment  string
 	User         *model.User
 	Error        string
 	Success      string
@@ -638,6 +642,9 @@ func (h *WebHandler) loadUsers(c *gin.Context) []UserWithFlagCount {
 
 func (h *WebHandler) renderTemplate(c *gin.Context, layout, content string, data PageData) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
+
+	// Environment label shown in the admin header on every full-page render
+	data.Environment = h.environment
 
 	// Parse templates fresh each time for development
 	// In production, you might want to cache this

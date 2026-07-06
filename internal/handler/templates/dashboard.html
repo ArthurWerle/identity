@@ -1,6 +1,6 @@
 {{define "content"}}
 <nav class="navbar">
-    <h1>Identity Admin</h1>
+    <h1>Identity Admin{{if .Environment}}<span class="env-badge env-{{.Environment}}">{{.Environment}}</span>{{end}}</h1>
     <div class="user-info">
         <span>Welcome, {{.User.Name}}</span>
         <a href="/admin/logout">Logout</a>
