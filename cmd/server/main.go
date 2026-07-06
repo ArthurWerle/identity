@@ -255,6 +255,12 @@ func setupRouter(
 		// can evaluate flags without a user session
 		v1.GET("/feature-flags/check", featureFlagHandler.CheckFeatureFlag)
 
+		// Minimal user lookup (id, name) is public within the docker network so
+		// other services can resolve a user's display name without a user
+		// session (e.g. the transactions service labelling a transaction's
+		// creator). Only non-sensitive fields are returned.
+		v1.GET("/internal/users/:id", userHandler.GetPublicUser)
+
 		// Everything below requires a valid session (cookie or X-Session-ID)
 		authed := v1.Group("")
 		authed.Use(middleware.Auth(authService, logger))
