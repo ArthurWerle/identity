@@ -263,7 +263,7 @@ func setupRouter(
 
 		// Everything below requires a valid session (cookie or X-Session-ID)
 		authed := v1.Group("")
-		authed.Use(middleware.Auth(authService, logger))
+		authed.Use(middleware.Auth(authService, logger, cfg.Auth.CookieSecure))
 		{
 			users := authed.Group("/users")
 			{
@@ -298,7 +298,7 @@ func setupRouter(
 
 		// Protected routes
 		protected := admin.Group("")
-		protected.Use(middleware.WebAuth(authService, logger))
+		protected.Use(middleware.WebAuth(authService, logger, cfg.Auth.CookieSecure))
 		{
 			protected.GET("", webHandler.Dashboard)
 			protected.GET("/flags", webHandler.FlagsTab)

@@ -43,6 +43,19 @@ func sessionIDFromRequest(c *gin.Context) string {
 	return c.GetHeader(SessionHeaderName)
 }
 
+// clearSessionCookie expires the session cookie in the response.
+func (h *AuthHandler) clearSessionCookie(c *gin.Context) {
+	c.SetCookie(SessionCookieName, "", -1, "/", "", h.cookieSecure, true)
+}
+
+// clearSessionCookieIfPresent clears the cookie only when the request carried
+// one, so service-to-service X-Session-ID callers aren't handed a Set-Cookie.
+func (h *AuthHandler) clearSessionCookieIfPresent(c *gin.Context) {
+	if cookie, err := c.Cookie(SessionCookieName); err == nil && cookie != "" {
+		h.clearSessionCookie(c)
+	}
+}
+
 // Login godoc
 // @Summary Login user
 // @Description Authenticate a user and create a session
@@ -114,15 +127,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	// Clear session cookie
-	c.SetCookie(
-		SessionCookieName,
-		"",
-		-1,
-		"/",
-		"",
-		h.cookieSecure,
-		true,
-	)
+	h.clearSessionCookie(c)
 
 	h.logger.Info("user logged out", "session_id", sessionID)
 	c.JSON(http.StatusOK, dto.SuccessResponse{
@@ -193,6 +198,9 @@ func (h *AuthHandler) Me(c *gin.Context) {
 
 	resp, err := h.authService.GetUserBySession(c.Request.Context(), sessionID)
 	if err != nil {
+		// The cookie (if any) points at a dead session; clear it so the browser
+		// stops replaying it on every request.
+		h.clearSessionCookieIfPresent(c)
 		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
 			Error:   "unauthorized",
 			Message: err.Error(),

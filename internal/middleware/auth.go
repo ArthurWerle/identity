@@ -28,8 +28,24 @@ func SessionIDFromRequest(c *gin.Context) string {
 	return c.GetHeader(SessionHeaderName)
 }
 
+// ClearSessionCookie instructs the browser to drop the session cookie. Without
+// this, a dead session_id keeps getting replayed on every request (each one
+// 401s) and the client is stuck until cookies are cleared manually.
+func ClearSessionCookie(c *gin.Context, secure bool) {
+	c.SetCookie(SessionCookieName, "", -1, "/", "", secure, true)
+}
+
+// clearSessionCookieIfPresent clears the cookie only when the request actually
+// carried one, so service-to-service X-Session-ID calls aren't handed a
+// pointless Set-Cookie.
+func clearSessionCookieIfPresent(c *gin.Context, secure bool) {
+	if cookie, err := c.Cookie(SessionCookieName); err == nil && cookie != "" {
+		ClearSessionCookie(c, secure)
+	}
+}
+
 // Auth creates a middleware that validates the session and sets the user in context
-func Auth(authService service.AuthService, logger *slog.Logger) gin.HandlerFunc {
+func Auth(authService service.AuthService, logger *slog.Logger, cookieSecure bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sessionID := SessionIDFromRequest(c)
 		if sessionID == "" {
@@ -44,6 +60,9 @@ func Auth(authService service.AuthService, logger *slog.Logger) gin.HandlerFunc 
 		user, err := authService.ValidateSession(c.Request.Context(), sessionID)
 		if err != nil {
 			logger.Debug("session validation failed", "error", err)
+			// The session is dead; if it arrived as a cookie, tell the browser
+			// to drop it so it stops replaying a request that will only ever 401.
+			clearSessionCookieIfPresent(c, cookieSecure)
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error":   "unauthorized",
 				"message": "Invalid or expired session",
@@ -84,7 +103,7 @@ func OptionalAuth(authService service.AuthService, logger *slog.Logger) gin.Hand
 }
 
 // WebAuth creates a middleware for web routes that redirects to login on auth failure
-func WebAuth(authService service.AuthService, logger *slog.Logger) gin.HandlerFunc {
+func WebAuth(authService service.AuthService, logger *slog.Logger, cookieSecure bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sessionID, err := c.Cookie(SessionCookieName)
 		if err != nil {
@@ -96,6 +115,9 @@ func WebAuth(authService service.AuthService, logger *slog.Logger) gin.HandlerFu
 		user, err := authService.ValidateSession(c.Request.Context(), sessionID)
 		if err != nil {
 			logger.Debug("web session validation failed", "error", err)
+			// Dead cookie: clear it so the admin UI isn't stuck redirecting
+			// against a session_id the server will never accept.
+			ClearSessionCookie(c, cookieSecure)
 			c.Redirect(http.StatusFound, "/admin/login")
 			c.Abort()
 			return
